@@ -1,6 +1,7 @@
 {
   "name": "tempest-vips",
   "version": "1.0.0",
+  "description": "A simple script to fetch VIP Tempest user data to see which stations are offline",
   "main": "index.js",
   "type": "module",
   "author": "Julian Bowman",

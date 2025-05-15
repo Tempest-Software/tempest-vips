@@ -61,7 +61,8 @@ async function loadCacheFor(user) {
   if (res.status === 404) {
     return {};
   }
-  throw new Error(`${user} cache GET failed: ${res.status}`);
+  console.log(`${user} cache GET failed: ${res.status}`);
+  return;
 }
 
 // — save per-user cache —
@@ -69,21 +70,19 @@ async function saveCacheFor(user, cache) {
   const key = `${user}_stationOfflineCache.json`;
   const res = await s3Call(key, 'PUT', JSON.stringify(cache));
   if (res.status !== 200) {
-    throw new Error(`${user} cache PUT failed: ${res.status}`);
+    console.log(`${user} cache PUT failed: ${res.status}`);
+    return;
   }
 }
 
 // — process one user’s stations —
 async function processUser({ name, apiKey }) {
-  if (!apiKey) {
-    throw new Error(`Missing API key for user ${name}`);
-  }
-
   // 1) fetch
   const url    = `${GROUP_BASE_URL}/stations?api_key=${apiKey}`;
   const { data, status } = await axios.get(url);
   if (status !== 200) {
-    throw new Error(`HTTP ${status} fetching ${name} stations`);
+    console.log(`HTTP ${status} fetching ${name} stations`);
+    return;
   }
 
   // 2) load cache
@@ -151,7 +150,8 @@ async function checkAll() {
   }
 
   if (anyOffline) {
-    throw new Error(`Stations still offline: ${details.join(', ')}`);
+    console.log(`Stations still offline: ${details.join(', ')}`);
+    return;
   }
 
   console.log('✅ All stations for all users are online');

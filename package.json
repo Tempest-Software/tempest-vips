@@ -1,0 +1,12 @@
+{
+  "name": "tempest-vips",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "author": "Julian Bowman",
+  "dependencies": {
+    "aws4": "^1.13.2",
+    "axios": "^1.9.0",
+    "url": "^0.11.4"
+  }
+}

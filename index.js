@@ -2,22 +2,34 @@ import axios from 'axios';
 import aws4 from 'aws4';
 import { URL } from 'url';
 
-const BUCKET            = process.env.S3_BUCKET;
-const REGION            = process.env.AWS_REGION;
-const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
-const GROUP_BASE_URL    = "https://swd.weatherflow.com/swd/rest";
-const USERS             = ['KOOTENAI', 'CPI', 'MOSS'];
+import config from './config.json' with { type: 'json' };
+const {
+  S3_BUCKET,
+  AWS_REGION,
+  SLACK_WEBHOOK_URL,
+  AWS_ACCESS_KEY_ID,
+  AWS_SECRET_ACCESS_KEY,
+  KOOTENAI_API_Key,
+  CPI_API_Key,
+  MOSS_API_Key,
+} = config;
+const GROUP_BASE_URL     = "https://swd.weatherflow.com/swd/rest";
 
-// — low-level signed S3 call —
+const USERS = [
+  { name: 'KOOTENAI', apiKey: KOOTENAI_API_Key },
+  { name: 'CPI',      apiKey: CPI_API_Key      },
+  { name: 'MOSS',     apiKey: MOSS_API_Key     },
+];
+
 async function s3Call(cacheKey, method, body) {
-  const endpoint = `https://${BUCKET}.s3.${REGION}.amazonaws.com/${cacheKey}`;
+  const endpoint = `https://${S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${cacheKey}`;
   const url      = new URL(endpoint);
   const opts     = {
     host:    url.host,
     path:    url.pathname,
     method,
     service: 's3',
-    region:  REGION,
+    region:  AWS_REGION,
     headers: {
       'Host':         url.host,
       'Content-Type': 'application/json',
@@ -26,8 +38,8 @@ async function s3Call(cacheKey, method, body) {
     body,
   };
   aws4.sign(opts, {
-    accessKeyId:     process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    accessKeyId:     AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
   });
   return axios({
     url:            endpoint,
@@ -47,7 +59,7 @@ async function loadCacheFor(user) {
     return typeof raw === 'string' ? JSON.parse(raw) : raw;
   }
   if (res.status === 404) {
-    return {}; // no cache yet
+    return {};
   }
   throw new Error(`${user} cache GET failed: ${res.status}`);
 }
@@ -62,22 +74,25 @@ async function saveCacheFor(user, cache) {
 }
 
 // — process one user’s stations —
-async function processUser(user) {
-  // fetch
-  const apiKey = process.env[`${user}_API_Key`];
+async function processUser({ name, apiKey }) {
+  if (!apiKey) {
+    throw new Error(`Missing API key for user ${name}`);
+  }
+
+  // 1) fetch
   const url    = `${GROUP_BASE_URL}/stations?api_key=${apiKey}`;
   const { data, status } = await axios.get(url);
   if (status !== 200) {
-    throw new Error(`HTTP ${status} fetching ${user} stations`);
+    throw new Error(`HTTP ${status} fetching ${name} stations`);
   }
 
-  // load cache
-  const cache      = await loadCacheFor(user);
+  // 2) load cache
+  const cache      = await loadCacheFor(name);
   const newCache   = { ...cache };
   const newOffline = [];
   const recovered  = [];
 
-  // detect changes
+  // 3) detect changes
   for (const s of data.stations) {
     const id = String(s.station_id);
     if (s.state !== 1) {
@@ -91,50 +106,47 @@ async function processUser(user) {
     }
   }
 
-  // persist if changed
+  // 4) persist cache if anything changed
   if (newOffline.length || recovered.length) {
-    await saveCacheFor(user, newCache);
+    await saveCacheFor(name, newCache);
   }
 
-  // Slack: new offline
-  for (const { id, name } of newOffline) {
-    // await axios.post(SLACK_WEBHOOK_URL, {
-    //   text: `:rotating_light: ${user} Station *${id}* (${name}) is *OFFLINE*!`
-    // });
-    console.log(`:rotating_light: ${user} Station *${id}* (${name}) is *OFFLINE*!`);
+  // 5) send Slack alerts for new offline stations
+  for (const { id, name: stationName } of newOffline) {
+    await axios.post(SLACK_WEBHOOK_URL, {
+      text: `:rotating_light: ${name} Station *${id}* (${stationName}) is *OFFLINE*!`
+    });
   }
 
-  // Slack: recoveries
-  for (const { id, name } of recovered) {
-    // await axios.post(SLACK_WEBHOOK_URL, {
-    //   text: `:white_check_mark: ${user} Station *${id}* (${name}) has *RECOVERED*!`
-    // });
-    console.log(`:white_check_mark: ${user} Station *${id}* (${name}) has *RECOVERED*!`);
+  // 6) send Slack alerts for recoveries
+  for (const { id, name: stationName } of recovered) {
+    await axios.post(SLACK_WEBHOOK_URL, {
+      text: `:white_check_mark: ${name} Station *${id}* (${stationName}) has *RECOVERED*!`
+    });
   }
 
-  // Slack: all-online alert
+  // 7) send “all online” alert when flipping from any offline → zero offline
   const prevCount = Object.keys(cache).length;
   const currCount = Object.keys(newCache).length;
   if (prevCount > 0 && currCount === 0) {
-    // await axios.post(SLACK_WEBHOOK_URL, {
-    //   text: `:tada: All ${user} stations are now *ONLINE*!`
-    // });
-    console.log(`:tada: All ${user} stations are now *ONLINE*!`);
+    await axios.post(SLACK_WEBHOOK_URL, {
+      text: `:tada: All ${name} stations are now *ONLINE*!`
+    });
   }
 
   return currCount;
 }
 
-// — run for all users & fail if any still offline —
+// — run all users & throw if any still offline —
 async function checkAll() {
   let anyOffline = false;
   const details  = [];
 
-  for (const user of USERS) {
-    const count = await processUser(user);
-    if (count > 0) {
+  for (const userObj of USERS) {
+    const offlineCount = await processUser(userObj);
+    if (offlineCount > 0) {
       anyOffline = true;
-      details.push(`${user}: ${count}`);
+      details.push(`${userObj.name}: ${offlineCount}`);
     }
   }
 

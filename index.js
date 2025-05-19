@@ -7,7 +7,6 @@ const {
   AWS_REGION,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
-  TEST_SLACK_WEBHOOK_URL,
   VIP_SLACK_WEBHOOK_URL,
   KOOTENAI_API_Key,
   CPI_API_Key,
@@ -16,7 +15,6 @@ const {
 
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
 
-// instantiate S3 with explicit credentials
 const s3 = new AWS.S3({
   region: AWS_REGION,
   credentials: {
@@ -26,9 +24,21 @@ const s3 = new AWS.S3({
 });
 
 const USERS = [
-  { name: 'KOOTENAI', apiKey: KOOTENAI_API_Key },
-  { name: 'CPI',      apiKey: CPI_API_Key      },
-  { name: 'MOSS',     apiKey: MOSS_API_Key     },
+  {
+    name: 'KOOTENAI',
+    apiKey: KOOTENAI_API_Key,
+    alertUserIds: ['UQJLHM6LV'], // Dillon
+  },
+  {
+    name: 'CPI',
+    apiKey: CPI_API_Key,
+    alertUserIds: ['UQJLHM6LV'], // Dillon
+  },
+  {
+    name: 'MOSS',
+    apiKey: MOSS_API_Key,
+    alertUserIds: ['U10DNQSBV'], // Marty
+  },
 ];
 
 async function loadCacheFor(user) {
@@ -52,7 +62,7 @@ async function saveCacheFor(user, cache) {
   }).promise();
 }
 
-async function processUser({ name, apiKey }) {
+async function processUser({ name, apiKey, alertUserIds }) {
   const url = `${GROUP_BASE_URL}/stations?api_key=${apiKey}`;
   const { data, status } = await axios.get(url);
 
@@ -68,7 +78,7 @@ async function processUser({ name, apiKey }) {
 
   for (const station of data.stations) {
     const id = String(station.station_id);
-    
+
     if (station.state !== 1) {
       if (cache[id] !== 'offline') newOffline.push({ id, name: station.name });
       newCache[id] = 'offline';
@@ -82,23 +92,33 @@ async function processUser({ name, apiKey }) {
     await saveCacheFor(name, newCache);
   }
 
+  // build mention prefix
+  const mentionPrefix = alertUserIds.map(u => `<@${u}>`).join(' ');
+
+  // send offline alerts
   for (const { id, name: stationName } of newOffline) {
     await axios.post(VIP_SLACK_WEBHOOK_URL, {
-      text: `:rotating_light: ${name} Station *${id}* (${stationName}) is *OFFLINE*!`
+      text: `${mentionPrefix} :rotating_light: ${name} Station *${id}* (${stationName}) is *OFFLINE*!`,
+      link_names: 1,
     });
   }
 
+  // send recovery alerts
   for (const { id, name: stationName } of recovered) {
     await axios.post(VIP_SLACK_WEBHOOK_URL, {
-      text: `:white_check_mark: ${name} Station *${id}* (${stationName}) has *RECOVERED*!`
+      text: `:white_check_mark: ${name} Station *${id}* (${stationName}) has *RECOVERED*!`,
+      link_names: 1,
     });
   }
 
   const prevCount = Object.keys(cache).length;
   const currCount = Object.keys(newCache).length;
+
+  // send all-online notification if applicable
   if (prevCount > 0 && currCount === 0) {
     await axios.post(VIP_SLACK_WEBHOOK_URL, {
-      text: `:tada: All ${name} stations are now *ONLINE*!`
+      text: `:tada: All ${name} stations are now *ONLINE*!`,
+      link_names: 1,
     });
   }
 
@@ -123,8 +143,6 @@ async function checkAll() {
     console.log('✅ All stations for all users are online');
   }
 }
-
-await checkAll();
 
 export const handler = async () => {
   await checkAll();

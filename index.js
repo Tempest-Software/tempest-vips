@@ -7,7 +7,8 @@ const {
   AWS_REGION,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
-  SLACK_WEBHOOK_URL,
+  TEST_SLACK_WEBHOOK_URL,
+  VIP_SLACK_WEBHOOK_URL,
   KOOTENAI_API_Key,
   CPI_API_Key,
   MOSS_API_Key,
@@ -54,6 +55,7 @@ async function saveCacheFor(user, cache) {
 async function processUser({ name, apiKey }) {
   const url = `${GROUP_BASE_URL}/stations?api_key=${apiKey}`;
   const { data, status } = await axios.get(url);
+
   if (status !== 200) {
     console.warn(`HTTP ${status} fetching ${name} stations`);
     return 0;
@@ -64,13 +66,14 @@ async function processUser({ name, apiKey }) {
   const newOffline = [];
   const recovered  = [];
 
-  for (const s of data.stations) {
-    const id = String(s.station_id);
-    if (s.state !== 1) {
-      if (cache[id] !== 'offline') newOffline.push({ id, name: s.name });
+  for (const station of data.stations) {
+    const id = String(station.station_id);
+    
+    if (station.state !== 1) {
+      if (cache[id] !== 'offline') newOffline.push({ id, name: station.name });
       newCache[id] = 'offline';
     } else if (cache[id] === 'offline') {
-      recovered.push({ id, name: s.name });
+      recovered.push({ id, name: station.name });
       delete newCache[id];
     }
   }
@@ -80,13 +83,13 @@ async function processUser({ name, apiKey }) {
   }
 
   for (const { id, name: stationName } of newOffline) {
-    await axios.post(SLACK_WEBHOOK_URL, {
+    await axios.post(VIP_SLACK_WEBHOOK_URL, {
       text: `:rotating_light: ${name} Station *${id}* (${stationName}) is *OFFLINE*!`
     });
   }
 
   for (const { id, name: stationName } of recovered) {
-    await axios.post(SLACK_WEBHOOK_URL, {
+    await axios.post(VIP_SLACK_WEBHOOK_URL, {
       text: `:white_check_mark: ${name} Station *${id}* (${stationName}) has *RECOVERED*!`
     });
   }
@@ -94,7 +97,7 @@ async function processUser({ name, apiKey }) {
   const prevCount = Object.keys(cache).length;
   const currCount = Object.keys(newCache).length;
   if (prevCount > 0 && currCount === 0) {
-    await axios.post(SLACK_WEBHOOK_URL, {
+    await axios.post(VIP_SLACK_WEBHOOK_URL, {
       text: `:tada: All ${name} stations are now *ONLINE*!`
     });
   }

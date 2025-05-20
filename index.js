@@ -17,7 +17,6 @@ const {
 
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
 
-// instantiate S3 with explicit credentials
 const s3 = new AWS.S3({
   region: AWS_REGION,
   credentials: {
@@ -31,6 +30,35 @@ const USERS = [
   { name: 'CPI',      apiKey: CPI_API_Key      },
   { name: 'MOSS',     apiKey: MOSS_API_Key     },
 ];
+
+function processDevices(devices, settings = {}, target = null) {
+  return devices
+    .filter(device => !device.serial_number.includes('HB'))
+    .map(device => {
+      const { device_id, serial_number: serial, sensor_status: rawStatus } = device;
+      const deviceType = serial.split('-')[0];
+      const ds = new DeviceStatus(settings, target);
+      const sensorStatus = ds.findStatus(rawStatus, deviceType);
+
+      // collect each error-flag's failedText + sensor label
+      const failures = [];
+      if (sensorStatus === 'warning') {
+        const sensorDefs = ds.sensors[deviceType] || [];
+        for (const sensorDef of sensorDefs) {
+          for (const flagObj of sensorDef.flags) {
+            if (flagObj.type === 'warning' && ds._hasSensorError(rawStatus, flagObj.flag)) {
+              failures.push({
+                sensor: sensorDef.label,
+                reason: flagObj.failedText || sensorDef.label
+              });
+            }
+          }
+        }
+      }
+
+      return { device_id, serial, deviceType, rawStatus, sensorStatus, failures };
+    });
+}
 
 async function loadCacheFor(user) {
   const Key = `${user}_stationOfflineCache.json`;
@@ -53,26 +81,6 @@ async function saveCacheFor(user, cache) {
   }).promise();
 }
 
-// ————————————————
-// processDevices helper: uses sensor_status & serial_number from diagData.devices
-function processDevices(devices, settings = {}, target = null) {
-  return devices
-    .filter(device => !device.serial_number.includes('HB'))
-    .map(device => {
-      const deviceType = device.serial_number.split('-')[0];
-      const ds = new DeviceStatus(settings, target);
-      const humanStatus = ds.findStatus(device.sensor_status, deviceType);
-      return {
-        device_id:   device.device_id,
-        serial:      device.serial_number,
-        deviceType,
-        rawStatus:   device.sensor_status,
-        humanStatus,  // "failure" | "warning" | "success"
-      };
-    });
-}
-// ————————————————
-
 async function processUser({ name, apiKey }) {
   const stationsUrl = `${GROUP_BASE_URL}/stations?api_key=${apiKey}`;
   const { data, status } = await axios.get(stationsUrl);
@@ -90,11 +98,12 @@ async function processUser({ name, apiKey }) {
   for (const station of data.stations) {
     const id = String(station.station_id);
 
-    // 1️⃣ Fetch diagnostics for this station
+    // Fetch diagnostics for this station
     let diagData;
     try {
-      const diagUrl = `${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`;
-      const resp = await axios.get(diagUrl);
+      const resp = await axios.get(
+        `${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`
+      );
       if (resp.status === 200) {
         diagData = resp.data;
       } else {
@@ -104,16 +113,20 @@ async function processUser({ name, apiKey }) {
       console.warn(`Error fetching diagnostics for station ${id}:`, err.message);
     }
 
-    // 1.5️⃣ Process and log only non-success statuses
+    // Send Slack alerts for each error-flag
     if (diagData && Array.isArray(diagData.devices)) {
       const deviceStatuses = processDevices(diagData.devices);
-      const nonSuccess = deviceStatuses.filter(ds => ds.humanStatus !== 'success');
-      if (nonSuccess.length) {
-        console.log(`🔧 Station ${id} non-success device statuses:`, nonSuccess);
+      const failuresOnly = deviceStatuses.filter(ds => ds.humanStatus === 'warning');
+
+      for (const { serial, failures } of failuresOnly) {
+        for (const { sensor, reason } of failures) {
+          const text = `:warning: ${name} Station ${id} ${sensor} device (${serial}) has a sensor failure: ${reason}`;
+          console.log(text);
+          // await axios.post(TEST_SLACK_WEBHOOK_URL, { text });
+        }
       }
     }
 
-    // 2️⃣ Your existing online/offline logic
     if (station.state !== 1) {
       if (cache[id] !== 'offline') newOffline.push({ id, name: station.name });
       newCache[id] = 'offline';
@@ -123,7 +136,7 @@ async function processUser({ name, apiKey }) {
     }
   }
 
-  // 3️⃣ Persist cache and notify Slack as before
+  // Persist cache and notify Slack as before
   if (newOffline.length || recovered.length) {
     await saveCacheFor(name, newCache);
   }

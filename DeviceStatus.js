@@ -4,7 +4,6 @@ class DeviceStatus {
     const defaultSettings = {};
     this.settings = { ...defaultSettings, ...settings };
 
-    // Define the sensors object as part of the instance
     this.sensors = {
       AR: [
         {

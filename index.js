@@ -30,7 +30,7 @@ const USERS = [
   { name: 'MOSS',    apiKey: MOSS_API_Key,    alertUserIds: ['U10DNQSBV'] },
 ];
 
-const functionName = process.env.AWS_LAMBDA_FUNCTION_NAME || 'vip-lambda-julian';
+const functionName = 'vip-lambda-julian';
 
 async function loadCacheFor(user) {
   const Key = `${user}_stationOfflineCache.json`;
@@ -118,6 +118,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
     onlineCount,
     offlineCount
   );
+
   await sendMetricsBatch(metricLines);
 
   return offlineCount;

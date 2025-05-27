@@ -5,7 +5,6 @@ const { METRIC_URL } = config;
 
 export function buildMetricLines(userName, functionName, timestamp, onlineCount, offlineCount) {
   const name   = userName.toLowerCase();
-  console.log
   return [
     `vip.${name}_station_online_count.${functionName},${timestamp},${onlineCount}`,
     `vip.${name}_station_offline_count.${functionName},${timestamp},${offlineCount}`,

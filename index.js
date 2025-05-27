@@ -118,7 +118,6 @@ async function processUser({ name, apiKey, alertUserIds }) {
     onlineCount,
     offlineCount
   );
-  console.log(metricLines)
   await sendMetricsBatch(metricLines);
 
   return offlineCount;
@@ -140,8 +139,6 @@ async function checkAll() {
     console.log('✅ All stations for all users are online');
   }
 }
-
-await checkAll();
 
 export const handler = async () => {
   await checkAll();

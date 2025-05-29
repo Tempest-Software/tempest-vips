@@ -167,7 +167,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
     // 4) OFFLINE
     newCache[id] = { offline: true, failures: currentFailures };
     if (!wasOffline) {
-      const base = `${mention} :rotating_light: ${name} Station *${id}* (${station.name}) is *OFFLINE*`;
+      const base = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
       if (currentFailures.length) {
         await axios.post(VIP_SLACK_WEBHOOK_URL, {
           text: `${base} and has sensor failures: ${currentFailures.join(', ')}`

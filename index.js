@@ -135,11 +135,11 @@ async function processUser({ name, apiKey, alertUserIds }) {
       if (!wasOffline) {
         const base = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
         if (currentFailures.length) {
-          await axios.post(TEST_SLACK_WEBHOOK_URL, {
+          await axios.post(VIP_SLACK_WEBHOOK_URL, {
             text: `${base} and has sensor failures: ${currentFailures.join(', ')}`
           });
         } else {
-          await axios.post(TEST_SLACK_WEBHOOK_URL, { text: base + '!' });
+          await axios.post(VIP_SLACK_WEBHOOK_URL, { text: base + '!' });
         }
       }
 
@@ -149,7 +149,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
     // ── RECOVERY case ────────────────────────────────────────────────
     if (wasOffline && !isOffline) {
       delete newCache[id];
-      await axios.post(TEST_SLACK_WEBHOOK_URL, {
+      await axios.post(VIP_SLACK_WEBHOOK_URL, {
         text: `:white_check_mark: ${name} Station *${id}* (${station.name}) has *RECOVERED*!`,
         link_names: 1
       });
@@ -162,7 +162,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
 
       const newFailures = currentFailures.filter(s => !prevEntry.failures.includes(s));
       for (const sensor of newFailures) {
-        await axios.post(TEST_SLACK_WEBHOOK_URL, {
+        await axios.post(VIP_SLACK_WEBHOOK_URL, {
           text: `:warning: ${name} Station *${id}* has sensor failure: ${sensor}`
         });
       }

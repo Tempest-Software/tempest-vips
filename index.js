@@ -96,7 +96,9 @@ async function saveCacheFor(user, cache) {
 // ─── processUser: combine offline + sensor-failure logic ──────────────
 async function processUser({ name, apiKey, alertUserIds }) {
   // 1) fetch stations
-  const { data, status } = await axios.get(`${GROUP_BASE_URL}/stations?api_key=${apiKey}`);
+  const { data, status } = await axios.get(
+    `${GROUP_BASE_URL}/stations?api_key=${apiKey}`
+  );
   if (status !== 200) {
     console.warn(`HTTP ${status} fetching ${name} stations`);
     return 0;
@@ -109,14 +111,16 @@ async function processUser({ name, apiKey, alertUserIds }) {
 
   // 3) process each station
   for (const station of data.stations) {
-    const id        = String(station.station_id);
-    const prevEntry = cache[id] || { offline: false, failures: [] };
+    const id         = String(station.station_id);
+    const prevEntry  = cache[id] || { offline: false, failures: [] };
     const wasOffline = prevEntry.offline;
-    let failuresOnly = [];
 
-    // a) fetch diagnostics & compute failures
+    // a) fetch diagnostics & compute failuresOnly
+    let failuresOnly = [];
     try {
-      const resp = await axios.get(`${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`);
+      const resp = await axios.get(
+        `${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`
+      );
       if (resp.status === 200 && Array.isArray(resp.data.devices)) {
         const statuses = processDevices(resp.data.devices);
         failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
@@ -126,50 +130,53 @@ async function processUser({ name, apiKey, alertUserIds }) {
     }
 
     const isOffline = station.state !== 1;
+    const currentFailures = failuresOnly.flatMap(ds =>
+      ds.failures.map(f => f.sensor)
+    );
 
-    // ── OFFLINE case ────────────────────────────────────────────────
-    if (isOffline) {
-      const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
-      newCache[id] = { offline: true, failures: currentFailures };
-
-      if (!wasOffline) {
-        const base = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
-        if (currentFailures.length) {
-          await axios.post(VIP_SLACK_WEBHOOK_URL, {
-            text: `${base} and has sensor failures: ${currentFailures.join(', ')}`
-          });
-        } else {
-          await axios.post(VIP_SLACK_WEBHOOK_URL, { text: base + '!' });
-        }
-      }
-
-      continue;
-    }
-
-    // ── RECOVERY case ────────────────────────────────────────────────
-    if (wasOffline && !isOffline) {
-      delete newCache[id];
-      await axios.post(VIP_SLACK_WEBHOOK_URL, {
-        text: `:white_check_mark: ${name} Station *${id}* (${station.name}) has *RECOVERED*!`,
-        link_names: 1
-      });
-    }
-
-    // ── ONLINE with failures ─────────────────────────────────────────
-    if (!isOffline && failuresOnly.length) {
-      const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
+    // 1) ONLINE with new sensor failures
+    if (!isOffline && currentFailures.length) {
       newCache[id] = { offline: false, failures: currentFailures };
-
-      const newFailures = currentFailures.filter(s => !prevEntry.failures.includes(s));
+      const newFailures = currentFailures.filter(
+        s => !prevEntry.failures.includes(s)
+      );
       for (const sensor of newFailures) {
         await axios.post(VIP_SLACK_WEBHOOK_URL, {
           text: `:warning: ${name} Station *${id}* has sensor failure: ${sensor}`
         });
       }
+      continue;
     }
-    // ── ONLINE healthy ───────────────────────────────────────────────
-    else if (!isOffline) {
+
+    // 2) RECOVERY
+    if (!isOffline && wasOffline) {
+      delete newCache[id];
+      await axios.post(VIP_SLACK_WEBHOOK_URL, {
+        text: `:white_check_mark: ${name} Station *${id}* (${station.name}) has *RECOVERED*!`,
+        link_names: 1
+      });
+      continue;
+    }
+
+    // 3) HEALTHY ONLINE
+    if (!isOffline) {
       newCache[id] = { offline: false, failures: [] };
+      continue;
+    }
+
+    // 4) OFFLINE
+    newCache[id] = { offline: true, failures: currentFailures };
+    if (!wasOffline) {
+      const base = `${mention} :rotating_light: ${name} Station *${id}* (${station.name}) is *OFFLINE*`;
+      if (currentFailures.length) {
+        await axios.post(VIP_SLACK_WEBHOOK_URL, {
+          text: `${base} and has sensor failures: ${currentFailures.join(', ')}`
+        });
+      } else {
+        await axios.post(VIP_SLACK_WEBHOOK_URL, {
+          text: base + '!'
+        });
+      }
     }
   }
 
@@ -180,8 +187,14 @@ async function processUser({ name, apiKey, alertUserIds }) {
   const totalStations = data.stations.length;
   const offlineCount  = Object.values(newCache).filter(e => e.offline).length;
   const onlineCount   = totalStations - offlineCount;
-  const ts            = Math.floor(Date.now() / 1000);
-  const metricLines   = buildMetricLines(name, functionName, ts, onlineCount, offlineCount);
+  const timestamp     = Math.floor(Date.now() / 1000);
+  const metricLines   = buildMetricLines(
+    name,
+    functionName,
+    timestamp,
+    onlineCount,
+    offlineCount
+  );
   await sendMetricsBatch(metricLines);
 
   return offlineCount;

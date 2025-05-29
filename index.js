@@ -205,7 +205,7 @@ async function checkAll() {
   }
 }
 
-// Immediately run (for testing) and export Lambda handler
-await checkAll();
-export { processUser };
+// // Immediately run (for testing) and export Lambda handler
+// await checkAll();
+// export { processUser };
 export const handler = async () => { await checkAll(); };

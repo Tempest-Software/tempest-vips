@@ -183,12 +183,15 @@ async function processUser({ name, apiKey, alertUserIds }) {
   // 4) persist cache
   await saveCacheFor(name, newCache);
 
-  // 5) send metrics
+  // 5) send metrics, only counting today’s stations
   const totalStations = data.stations.length;
-  const offlineCount  = Object.values(newCache).filter(e => e.offline).length;
-  const onlineCount   = totalStations - offlineCount;
-  const timestamp     = Math.floor(Date.now() / 1000);
-  const metricLines   = buildMetricLines(
+  const offlineCount = data.stations
+    .filter(s => newCache[String(s.station_id)]?.offline)
+    .length;
+  const onlineCount = totalStations - offlineCount;
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const metricLines = buildMetricLines(
     name,
     functionName,
     timestamp,

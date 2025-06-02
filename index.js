@@ -93,112 +93,136 @@ async function saveCacheFor(user, cache) {
   }).promise();
 }
 
-// ─── processUser: combine offline + sensor-failure logic ──────────────
 async function processUser({ name, apiKey, alertUserIds }) {
-  // 1) fetch stations
-  const { data, status } = await axios.get(
-    `${GROUP_BASE_URL}/stations?api_key=${apiKey}`
-  );
-  if (status !== 200) {
-    console.warn(`HTTP ${status} fetching ${name} stations`);
+  let cache = {};
+  let newCache = {};
+  let stationsData;
+
+  try {
+    const resp = await axios.get(`${GROUP_BASE_URL}/stations?api_key=${apiKey}`);
+    if (resp.status !== 200) {
+      console.warn(`HTTP ${resp.status} fetching ${name} stations`);
+      return 0;
+    }
+    stationsData = resp.data.stations;
+  } catch (err) {
+    console.warn(`Network error fetching stations for ${name}:`, err.message);
     return 0;
   }
 
-  // 2) load and prepare cache
-  const cache    = await loadCacheFor(name);
-  const newCache = { ...cache };
-  const mention  = alertUserIds.map(u => `<@${u}>`).join(' ');
+  // 2) Load existing cache from S3 (if any)
+  try {
+    cache = await loadCacheFor(name);
+  } catch (err) {
+    console.warn(`Could not load cache for ${name}, starting with empty.`, err.message);
+    cache = {};
+  }
+  newCache = { ...cache };
 
-  // 3) process each station
-  for (const station of data.stations) {
-    const id         = String(station.station_id);
-    const prevEntry  = cache[id] || { offline: false, failures: [] };
+  const mention = alertUserIds.map(u => `<@${u}>`).join(' ');
+
+  // 3) Process each station; wrap Slack posts in try/catch, but always set newCache entry
+  for (const station of stationsData) {
+    const id = String(station.station_id);
+    const prevEntry = cache[id] || { offline: false, failures: [] };
     const wasOffline = prevEntry.offline;
 
-    // a) fetch diagnostics & compute failuresOnly
+    // 3a) Fetch diagnostics for sensor failures (if any)
     let failuresOnly = [];
     try {
-      const resp = await axios.get(
-        `${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`
-      );
-      if (resp.status === 200 && Array.isArray(resp.data.devices)) {
-        const statuses = processDevices(resp.data.devices);
+      const diagResp = await axios.get(`${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`);
+      if (diagResp.status === 200 && Array.isArray(diagResp.data.devices)) {
+        const statuses = processDevices(diagResp.data.devices);
         failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
       }
     } catch (err) {
       console.warn(`Error fetching diagnostics for station ${id}:`, err.message);
     }
+    const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
 
     const isOffline = station.state !== 1;
-    const currentFailures = failuresOnly.flatMap(ds =>
-      ds.failures.map(f => f.sensor)
-    );
 
-    // 1) ONLINE with new sensor failures
+    // 3b) ONLINE with new sensor failures
     if (!isOffline && currentFailures.length) {
-      newCache[id] = { offline: false, failures: currentFailures };
-      const newFailures = currentFailures.filter(
-        s => !prevEntry.failures.includes(s)
-      );
+      newCache[id] = {
+        offline: false,
+        failures: currentFailures
+      };
+
+      // Find newly failed sensors
+      const newFailures = currentFailures.filter(s => !prevEntry.failures.includes(s));
       for (const sensor of newFailures) {
-        await axios.post(VIP_SLACK_WEBHOOK_URL, {
-          text: `:warning: ${name} Station *${id}* has sensor failure: ${sensor}`
-        });
+        try {
+          await axios.post(TEST_SLACK_WEBHOOK_URL, {
+            text: `:warning: ${name} Station *${id}* has sensor failure: ${sensor}`
+          });
+        } catch (slackErr) {
+          console.warn(`Slack sensor-failure post failed for station ${id}:`, slackErr.message);
+        }
       }
       continue;
     }
 
-    // 2) RECOVERY
+    // 3c) RECOVERY (station went from offline → online)
     if (!isOffline && wasOffline) {
       delete newCache[id];
-      await axios.post(VIP_SLACK_WEBHOOK_URL, {
-        text: `:white_check_mark: ${name} Station *${id}* (${station.name}) has *RECOVERED*!`,
-        link_names: 1
-      });
+      try {
+        await axios.post(TEST_SLACK_WEBHOOK_URL, {
+          text: `:white_check_mark: ${name} Station *${id}* (${station.name}) has *RECOVERED*!`,
+          link_names: 1
+        });
+      } catch (slackErr) {
+        console.warn(`Slack recovery post failed for station ${id}:`, slackErr.message);
+      }
       continue;
     }
 
-    // 3) HEALTHY ONLINE
+    // 3d) HEALTHY ONLINE (no offline, no new failures)
     if (!isOffline) {
       newCache[id] = { offline: false, failures: [] };
       continue;
     }
 
-    // 4) OFFLINE
-    newCache[id] = { offline: true, failures: currentFailures };
+    // 3e) OFFLINE
+    // If station just went offline (wasOffline === false), send Slack alert.
     if (!wasOffline) {
-      const base = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
-      if (currentFailures.length) {
-        await axios.post(VIP_SLACK_WEBHOOK_URL, {
-          text: `${base} and has sensor failures: ${currentFailures.join(', ')}`
-        });
-      } else {
-        await axios.post(VIP_SLACK_WEBHOOK_URL, {
-          text: base + '!'
-        });
+      const baseText = `:rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
+      try {
+        if (currentFailures.length) {
+          await axios.post(TEST_SLACK_WEBHOOK_URL, {
+            text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
+          });
+        } else {
+          await axios.post(TEST_SLACK_WEBHOOK_URL, { text: baseText + '!' });
+        }
+      } catch (slackErr) {
+        console.warn(`Slack offline post failed for station ${id}:`, slackErr.message);
       }
     }
+
+    newCache[id] = { offline: true, failures: currentFailures };
   }
 
-  // 4) persist cache
-  await saveCacheFor(name, newCache);
+  // 4) Persist updated cache in S3 (always run, even if earlier code threw)
+  try {
+    await saveCacheFor(name, newCache);
+    console.log(`🔄 Saved updated cache for ${name} (entries: ${Object.keys(newCache).length})`);
+  } catch (writeErr) {
+    console.error(`❗️ Failed to save cache for ${name}:`, writeErr.message);
+  }
 
-  // 5) send metrics, only counting today’s stations
-  const totalStations = data.stations.length;
-  const offlineCount = data.stations
-    .filter(s => newCache[String(s.station_id)]?.offline)
-    .length;
+  // 5) Send metrics
+  const totalStations = stationsData.length;
+  const offlineCount = stationsData.filter(s => newCache[String(s.station_id)]?.offline).length;
   const onlineCount = totalStations - offlineCount;
-
   const timestamp = Math.floor(Date.now() / 1000);
-  const metricLines = buildMetricLines(
-    name,
-    functionName,
-    timestamp,
-    onlineCount,
-    offlineCount
-  );
-  await sendMetricsBatch(metricLines);
+  const metricLines = buildMetricLines(name, functionName, timestamp, onlineCount, offlineCount);
+
+  try {
+    await sendMetricsBatch(metricLines);
+  } catch (metricErr) {
+    console.warn(`Could not send metrics for ${name}:`, metricErr.message);
+  }
 
   return offlineCount;
 }

@@ -17,6 +17,8 @@ const {
 } = config;
 
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
+const functionName = 'vip-lambda-julian';
+
 const s3 = new AWS.S3({
   region: AWS_REGION,
   credentials: {
@@ -30,8 +32,6 @@ const USERS = [
   { name: 'CPI',      apiKey: CPI_API_Key,     alertUserIds: ['UQJLHM6LV'] },
   { name: 'MOSS',     apiKey: MOSS_API_Key,    alertUserIds: ['U10DNQSBV'] },
 ];
-
-const functionName = 'vip-lambda-julian';
 
 function processDevices(devices, settings = {}, target = null) {
   return devices
@@ -97,14 +97,15 @@ async function processUser({ name, apiKey, alertUserIds }) {
   let cache = {};
   let newCache = {};
   let stationsData;
+  const mention = alertUserIds.map(u => `<@${u}>`).join(' ');
 
   try {
-    const resp = await axios.get(`${GROUP_BASE_URL}/stations?api_key=${apiKey}`);
-    if (resp.status !== 200) {
-      console.warn(`HTTP ${resp.status} fetching ${name} stations`);
+    const response = await axios.get(`${GROUP_BASE_URL}/stations?api_key=${apiKey}`);
+    if (response.status !== 200) {
+      console.warn(`HTTP ${response.status} fetching ${name} stations`);
       return 0;
     }
-    stationsData = resp.data.stations;
+    stationsData = response.data.stations;
   } catch (err) {
     console.warn(`Network error fetching stations for ${name}:`, err.message);
     return 0;
@@ -119,8 +120,6 @@ async function processUser({ name, apiKey, alertUserIds }) {
   }
   newCache = { ...cache };
 
-  const mention = alertUserIds.map(u => `<@${u}>`).join(' ');
-
   // 3) Process each station; wrap Slack posts in try/catch, but always set newCache entry
   for (const station of stationsData) {
     const id = String(station.station_id);
@@ -130,9 +129,9 @@ async function processUser({ name, apiKey, alertUserIds }) {
     // 3a) Fetch diagnostics for sensor failures (if any)
     let failuresOnly = [];
     try {
-      const diagResp = await axios.get(`${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`);
-      if (diagResp.status === 200 && Array.isArray(diagResp.data.devices)) {
-        const statuses = processDevices(diagResp.data.devices);
+      const response = await axios.get(`${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`);
+      if (response.status === 200 && Array.isArray(response.data.devices)) {
+        const statuses = processDevices(response.data.devices);
         failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
       }
     } catch (err) {
@@ -153,7 +152,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
       const newFailures = currentFailures.filter(s => !prevEntry.failures.includes(s));
       for (const sensor of newFailures) {
         try {
-          await axios.post(TEST_SLACK_WEBHOOK_URL, {
+          await axios.post(VIP_SLACK_WEBHOOK_URL, {
             text: `:warning: ${name} Station *${id}* has sensor failure: ${sensor}`
           });
         } catch (slackErr) {
@@ -167,8 +166,8 @@ async function processUser({ name, apiKey, alertUserIds }) {
     if (!isOffline && wasOffline) {
       delete newCache[id];
       try {
-        await axios.post(TEST_SLACK_WEBHOOK_URL, {
-          text: `:white_check_mark: ${name} Station *${id}* (${station.name}) has *RECOVERED*!`,
+        await axios.post(VIP_SLACK_WEBHOOK_URL, {
+          text: `:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`,
           link_names: 1
         });
       } catch (slackErr) {
@@ -186,14 +185,14 @@ async function processUser({ name, apiKey, alertUserIds }) {
     // 3e) OFFLINE
     // If station just went offline (wasOffline === false), send Slack alert.
     if (!wasOffline) {
-      const baseText = `:rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
+      const baseText = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
       try {
         if (currentFailures.length) {
-          await axios.post(TEST_SLACK_WEBHOOK_URL, {
+          await axios.post(VIP_SLACK_WEBHOOK_URL, {
             text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
           });
         } else {
-          await axios.post(TEST_SLACK_WEBHOOK_URL, { text: baseText + '!' });
+          await axios.post(VIP_SLACK_WEBHOOK_URL, { text: baseText + '!' });
         }
       } catch (slackErr) {
         console.warn(`Slack offline post failed for station ${id}:`, slackErr.message);
@@ -206,9 +205,9 @@ async function processUser({ name, apiKey, alertUserIds }) {
   // 4) Persist updated cache in S3 (always run, even if earlier code threw)
   try {
     await saveCacheFor(name, newCache);
-    console.log(`🔄 Saved updated cache for ${name} (entries: ${Object.keys(newCache).length})`);
+    console.log(`Saved updated cache for ${name} (entries: ${Object.keys(newCache).length})`);
   } catch (writeErr) {
-    console.error(`❗️ Failed to save cache for ${name}:`, writeErr.message);
+    console.error(`Failed to save cache for ${name}:`, writeErr.message);
   }
 
   // 5) Send metrics
@@ -245,7 +244,7 @@ async function checkAll() {
   }
 }
 
-// // Immediately run (for testing) and export Lambda handler
+// Immediately run (for testing) and export Lambda handler
 // await checkAll();
 // export { processUser };
 export const handler = async () => { await checkAll(); };

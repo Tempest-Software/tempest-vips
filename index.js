@@ -217,7 +217,7 @@ async function checkAll() {
 
 export const handler = async () => { await checkAll(); };
 
-await checkAll();
+// await checkAll();
 
-// (Optionally export processUser if you want to unit-test it from elsewhere)
-export { processUser };
+// // (Optionally export processUser if you want to unit-test it from elsewhere)
+// export { processUser };

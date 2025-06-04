@@ -1,15 +1,11 @@
 import axios from 'axios';
-import AWS   from 'aws-sdk';
 import config from './config.json' with { type: 'json' };
+
 import DeviceStatus from './DeviceStatus.js';
+import { loadCacheFor, saveCacheFor } from './cache.js';
 import { buildMetricLines, sendMetricsBatch } from './metrics.js';
 
 const {
-  S3_BUCKET,
-  AWS_REGION,
-  AWS_ACCESS_KEY_ID,
-  AWS_SECRET_ACCESS_KEY,
-  TEST_SLACK_WEBHOOK_URL,
   VIP_SLACK_WEBHOOK_URL,
   KOOTENAI_API_Key,
   CPI_API_Key,
@@ -19,88 +15,39 @@ const {
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
 const functionName = 'vip-lambda-julian';
 
-const s3 = new AWS.S3({
-  region: AWS_REGION,
-  credentials: {
-    accessKeyId:     AWS_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
-  },
-});
-
 const USERS = [
   { name: 'KOOTENAI', apiKey: KOOTENAI_API_Key, alertUserIds: ['UQJLHM6LV'] },
   { name: 'CPI',      apiKey: CPI_API_Key,     alertUserIds: ['UQJLHM6LV'] },
   { name: 'MOSS',     apiKey: MOSS_API_Key,    alertUserIds: ['U10DNQSBV'] },
 ];
 
-function processDevices(devices, settings = {}, target = null) {
-  return devices
-    .filter(d => !d.serial_number.includes('HB'))
-    .map(device => {
-      const { device_id, serial_number: serial, sensor_status: rawStatus } = device;
-      const deviceType = serial.split('-')[0];
-      const ds = new DeviceStatus(settings, target);
-
-      const sensorStatus = ds.findStatus(rawStatus, deviceType);
-
-      const failures = [];
-      if (sensorStatus === 'failure') {
-        const defs = ds.sensors[deviceType] || [];
-        for (const def of defs) {
-          for (const f of def.flags) {
-            if (f.type === 'error' && ds._hasSensorError(rawStatus, f.flag)) {
-              failures.push({ sensor: def.label, reason: f.failedText || def.label });
-            }
-          }
-        }
-      }
-
-      return { device_id, serial, deviceType, rawStatus, sensorStatus, failures };
-    });
-}
-
-async function loadCacheFor(user) {
-  const Key = `${user}_stationOfflineCache.json`;
-  try {
-    const { Body } = await s3.getObject({ Bucket: S3_BUCKET, Key }).promise();
-    const raw = JSON.parse(Body.toString());
-    const cache = {};
-    for (const [id, val] of Object.entries(raw)) {
-      if (typeof val === 'object' && val !== null) {
-        cache[id] = {
-          offline: Boolean(val.offline),
-          failures: Array.isArray(val.failures) ? val.failures : []
-        };
-      } else {
-        cache[id] = { offline: val === 'offline', failures: [] };
-      }
-    }
-    return cache;
-  } catch (err) {
-    if (err.code === 'NoSuchKey' || err.code === 'NotFound') return {};
-    throw err;
-  }
-}
-
-// ─── saveCacheFor: write updated cache back to S3 ──────────────────────
-async function saveCacheFor(user, cache) {
-  const Key = `${user}_stationOfflineCache.json`;
-  await s3.putObject({
-    Bucket:      S3_BUCKET,
-    Key,
-    Body:        JSON.stringify(cache, null, 2),
-    ContentType: 'application/json',
-  }).promise();
-}
+const SENSOR_KEYS = [
+  'air_temperature',
+  'rh',
+  'lightning',
+  'wind',
+  'precip',
+  'light_uv',
+  'pressure'
+];
 
 async function processUser({ name, apiKey, alertUserIds }) {
-  let cache = {};
-  let newCache = {};
+  let cache     = {};
+  let newCache  = {};
   let stationsData;
+
   const mention = alertUserIds.map(u => `<@${u}>`).join(' ');
 
+  const sensorFailureCounts = {};
+
+  for (const key of SENSOR_KEYS) {
+    sensorFailureCounts[key] = 0;
+  }
+
+  // Get Stations
   try {
     const response = await axios.get(`${GROUP_BASE_URL}/stations?api_key=${apiKey}`);
+
     if (response.status !== 200) {
       console.warn(`HTTP ${response.status} fetching ${name} stations`);
       return 0;
@@ -111,58 +58,69 @@ async function processUser({ name, apiKey, alertUserIds }) {
     return 0;
   }
 
-  // 2) Load existing cache from S3 (if any)
+  // Get Cache
   try {
     cache = await loadCacheFor(name);
   } catch (err) {
-    console.warn(`Could not load cache for ${name}, starting with empty.`, err.message);
+    console.warn(`Could not load cache for ${name}, starting with empty:`, err.message);
     cache = {};
   }
+
   newCache = { ...cache };
 
-  // 3) Process each station; wrap Slack posts in try/catch, but always set newCache entry
+  // Iterate over each station and fetch diagnostics
   for (const station of stationsData) {
     const id = String(station.station_id);
     const prevEntry = cache[id] || { offline: false, failures: [] };
     const wasOffline = prevEntry.offline;
 
-    // 3a) Fetch diagnostics for sensor failures (if any)
-    let failuresOnly = [];
+    let statuses = [];
     try {
       const response = await axios.get(`${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`);
+
       if (response.status === 200 && Array.isArray(response.data.devices)) {
-        const statuses = processDevices(response.data.devices);
-        failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
+        statuses = DeviceStatus.processDevices(response.data.devices);
       }
     } catch (err) {
       console.warn(`Error fetching diagnostics for station ${id}:`, err.message);
     }
+
+    // Gather only devices whose sensorStatus === 'failure'
+    const failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
+
+    // Flatten out every “sensor key” that failed, across all devices in this station
     const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
+
+    // Increment the global sensorFailureCounts by key
+    for (const key of currentFailures) {
+      if (sensorFailureCounts.hasOwnProperty(key)) {
+        sensorFailureCounts[key]++;
+      } else {
+        sensorFailureCounts[key] = (sensorFailureCounts[key] || 0) + 1;
+      }
+    }
 
     const isOffline = station.state !== 1;
 
-    // 3b) ONLINE with new sensor failures
+    // Station is online AND has new failures
     if (!isOffline && currentFailures.length) {
-      newCache[id] = {
-        offline: false,
-        failures: currentFailures
-      };
+      newCache[id] = { offline: false, failures: currentFailures };
 
-      // Find newly failed sensors
       const newFailures = currentFailures.filter(s => !prevEntry.failures.includes(s));
-      for (const sensor of newFailures) {
+
+      for (const sensorKey of newFailures) {
         try {
           await axios.post(VIP_SLACK_WEBHOOK_URL, {
-            text: `:warning: ${name} Station *${id}* has sensor failure: ${sensor}`
+            text: `:warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
           });
         } catch (slackErr) {
-          console.warn(`Slack sensor-failure post failed for station ${id}:`, slackErr.message);
+          console.warn(`Slack sensor‐failure post failed for station ${id}:`, slackErr.message);
         }
       }
       continue;
     }
 
-    // 3c) RECOVERY (station went from offline → online)
+    // Station was offline, but now is online
     if (!isOffline && wasOffline) {
       delete newCache[id];
       try {
@@ -176,14 +134,13 @@ async function processUser({ name, apiKey, alertUserIds }) {
       continue;
     }
 
-    // 3d) HEALTHY ONLINE (no offline, no new failures)
+    //Station is online, no newly failing sensors, and was not offline
     if (!isOffline) {
       newCache[id] = { offline: false, failures: [] };
       continue;
     }
 
-    // 3e) OFFLINE
-    // If station just went offline (wasOffline === false), send Slack alert.
+    // Station is offline AND was previously online
     if (!wasOffline) {
       const baseText = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
       try {
@@ -192,17 +149,18 @@ async function processUser({ name, apiKey, alertUserIds }) {
             text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
           });
         } else {
-          await axios.post(VIP_SLACK_WEBHOOK_URL, { text: baseText + '!' });
+          await axios.post(VIP_SLACK_WEBHOOK_URL, {
+            text: baseText + '!'
+          });
         }
       } catch (slackErr) {
         console.warn(`Slack offline post failed for station ${id}:`, slackErr.message);
       }
     }
-
     newCache[id] = { offline: true, failures: currentFailures };
   }
 
-  // 4) Persist updated cache in S3 (always run, even if earlier code threw)
+  //SAVE updated cache back to S3
   try {
     await saveCacheFor(name, newCache);
     console.log(`Saved updated cache for ${name} (entries: ${Object.keys(newCache).length})`);
@@ -210,12 +168,20 @@ async function processUser({ name, apiKey, alertUserIds }) {
     console.error(`Failed to save cache for ${name}:`, writeErr.message);
   }
 
-  // 5) Send metrics
+  // BUILD + SEND Metrics
   const totalStations = stationsData.length;
-  const offlineCount = stationsData.filter(s => newCache[String(s.station_id)]?.offline).length;
-  const onlineCount = totalStations - offlineCount;
-  const timestamp = Math.floor(Date.now() / 1000);
-  const metricLines = buildMetricLines(name, functionName, timestamp, onlineCount, offlineCount);
+  const offlineCount  = stationsData.filter(s => newCache[String(s.station_id)]?.offline).length;
+  const onlineCount   = totalStations - offlineCount;
+  const timestamp     = Math.floor(Date.now() / 1000);
+
+  const metricLines = buildMetricLines(
+    name,
+    functionName,
+    timestamp,
+    onlineCount,
+    offlineCount,
+    sensorFailureCounts
+  );
 
   try {
     await sendMetricsBatch(metricLines);
@@ -226,10 +192,14 @@ async function processUser({ name, apiKey, alertUserIds }) {
   return offlineCount;
 }
 
-// ─── checkAll & handler ─────────────────────────────────────────────
+/**
+ * Loop through every “user” in USERS[], call processUser, and
+ * log an error if any station remains offline.
+ */
 async function checkAll() {
   let anyOffline = false;
   const details = [];
+
   for (const user of USERS) {
     const cnt = await processUser(user);
     if (cnt > 0) {
@@ -237,6 +207,7 @@ async function checkAll() {
       details.push(`${user.name}: ${cnt}`);
     }
   }
+
   if (anyOffline) {
     console.error(`Stations still offline: ${details.join(', ')}`);
   } else {
@@ -244,7 +215,9 @@ async function checkAll() {
   }
 }
 
-// Immediately run (for testing) and export Lambda handler
-// await checkAll();
-// export { processUser };
 export const handler = async () => { await checkAll(); };
+
+await checkAll();
+
+// (Optionally export processUser if you want to unit-test it from elsewhere)
+export { processUser };

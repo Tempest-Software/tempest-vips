@@ -8,6 +8,7 @@ class DeviceStatus {
       AR: [
         {
           label: "Temperature",
+          key:"air_temperature",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_TEMPERATURE_FAILED,
@@ -17,6 +18,7 @@ class DeviceStatus {
         },
         {
           label: "RH",
+          key:"rh",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_RH_FAILED,
@@ -26,6 +28,7 @@ class DeviceStatus {
         },
         {
           label: "Lightning",
+          key:"lightning",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_LIGHTNING_FAILED,
@@ -47,6 +50,7 @@ class DeviceStatus {
       SK: [
         {
           label: "Wind",
+          key:"wind",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.SKY_WIND_FAILED,
@@ -56,6 +60,7 @@ class DeviceStatus {
         },
         {
           label: "Precip",
+          key:"precip",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.SKY_PRECIP_FAILED,
@@ -65,6 +70,7 @@ class DeviceStatus {
         },
         {
           label: "Light / UV",
+          key:"light_uv",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.SKY_LIGHT_UV_FAIL,
@@ -76,6 +82,7 @@ class DeviceStatus {
       ST: [
         {
           label: "Temperature",
+          key:"air_temperature",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_TEMPERATURE_FAILED,
@@ -85,6 +92,7 @@ class DeviceStatus {
         },
         {
           label: "RH",
+          key:"rh",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_RH_FAILED,
@@ -94,6 +102,7 @@ class DeviceStatus {
         },
         {
           label: "Lightning",
+          key:"lightning",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_LIGHTNING_FAILED,
@@ -113,6 +122,7 @@ class DeviceStatus {
         },
         {
           label: "Air Pressure",
+          key:"pressure",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.AIR_PRESSURE_FAILED,
@@ -122,6 +132,7 @@ class DeviceStatus {
         },
         {
           label: "Precip",
+          key:"precip",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.SKY_PRECIP_FAILED,
@@ -131,6 +142,7 @@ class DeviceStatus {
         },
         {
           label: "Light / UV",
+          key:"light_uv",
           flags: [
             {
               flag: DeviceStatus.SENSOR_STATUS_FLAGS.SKY_LIGHT_UV_FAIL,
@@ -272,6 +284,34 @@ class DeviceStatus {
 
     return retval;
   }
+
+  static processDevices = function (devices, settings = {}, target = null) {
+    return devices
+      .filter(d => !d.serial_number.includes('HB'))
+      .map(device => {
+        const { device_id, serial_number: serial, sensor_status: rawStatus } = device;
+        const deviceType = serial.split('-')[0];
+        const ds = new DeviceStatus(settings, target);
+
+        const sensorStatus = ds.findStatus(rawStatus, deviceType);
+        const failures = [];
+
+        if (sensorStatus === 'failure') {
+          // Look up definitions for this deviceType
+          const defs = ds.sensors[deviceType] || [];
+          for (const def of defs) {
+            for (const f of def.flags) {
+              if (f.type === 'error' && ds._hasSensorError(rawStatus, f.flag)) {
+                // use def.key instead of def.label
+                failures.push({ sensor: def.key, reason: f.failedText || def.key });
+              }
+            }
+          }
+        }
+
+        return { device_id, serial, deviceType, rawStatus, sensorStatus, failures };
+      });
+    }
 
   _hasSensorError(status, flag) {
     let retval = false;

@@ -34,9 +34,6 @@ export function buildMetricLines(
     );
 
     const totalSuccesses = failureKeys.reduce((sum, k) => sum + (sensorSuccessCounts[k] || 0), 0);
-    console.log(
-      `Total successes for ${name}: ${totalSuccesses} (function: ${functionName})`
-    );
     lines.push(
       `vip.${name}_station_total_success_count.${functionName},${timestamp},${totalSuccesses}`
     );

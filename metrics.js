@@ -9,7 +9,8 @@ export function buildMetricLines(
   timestamp,
   onlineCount,
   offlineCount,
-  sensorFailureCounts = {}
+  sensorFailureCounts,
+  sensorSuccessCounts
 ) {
   const name = userName.toLowerCase();
 
@@ -30,6 +31,14 @@ export function buildMetricLines(
     const totalFailures = failureKeys.reduce((sum, k) => sum + (sensorFailureCounts[k] || 0), 0);
     lines.push(
       `vip.${name}_station_total_failure_count.${functionName},${timestamp},${totalFailures}`
+    );
+
+    const totalSuccesses = failureKeys.reduce((sum, k) => sum + (sensorSuccessCounts[k] || 0), 0);
+    console.log(
+      `Total successes for ${name}: ${totalSuccesses} (function: ${functionName})`
+    );
+    lines.push(
+      `vip.${name}_station_total_success_count.${functionName},${timestamp},${totalSuccesses}`
     );
   }
 

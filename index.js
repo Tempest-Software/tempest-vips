@@ -10,6 +10,7 @@ const {
   KOOTENAI_API_Key,
   CPI_API_Key,
   MOSS_API_Key,
+  CALPINE_API_Key
 } = config;
 
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
@@ -19,6 +20,7 @@ const USERS = [
   { name: 'KOOTENAI', apiKey: KOOTENAI_API_Key, alertUserIds: ['UQJLHM6LV'] },
   { name: 'CPI',      apiKey: CPI_API_Key,     alertUserIds: ['UQJLHM6LV'] },
   { name: 'MOSS',     apiKey: MOSS_API_Key,    alertUserIds: ['U10DNQSBV'] },
+  { name: 'CALPINE',  apiKey: CALPINE_API_Key, alertUserIds: ['U06DYM1QMNK'] }
 ];
 
 const SENSOR_KEYS = [
@@ -32,16 +34,18 @@ const SENSOR_KEYS = [
 ];
 
 async function processUser({ name, apiKey, alertUserIds }) {
+  const sensorFailureCounts = {};
+  const sensorSuccessCounts = {};
   let cache     = {};
   let newCache  = {};
   let stationsData;
 
   const mention = alertUserIds.map(u => `<@${u}>`).join(' ');
 
-  const sensorFailureCounts = {};
 
   for (const key of SENSOR_KEYS) {
     sensorFailureCounts[key] = 0;
+    sensorSuccessCounts[key] = 0;
   }
 
   // Get Stations
@@ -97,6 +101,13 @@ async function processUser({ name, apiKey, alertUserIds }) {
         sensorFailureCounts[key]++;
       } else {
         sensorFailureCounts[key] = (sensorFailureCounts[key] || 0) + 1;
+      }
+    }
+
+    // ALSO count “healthy” sensors (those in SENSOR_KEYS but not in currentFailures)
+    for (const key of SENSOR_KEYS) {
+      if (!currentFailures.includes(key)) {
+        sensorSuccessCounts[key]++;
       }
     }
 
@@ -180,7 +191,8 @@ async function processUser({ name, apiKey, alertUserIds }) {
     timestamp,
     onlineCount,
     offlineCount,
-    sensorFailureCounts
+    sensorFailureCounts,
+    sensorSuccessCounts
   );
 
   try {

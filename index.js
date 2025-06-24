@@ -122,7 +122,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
       for (const sensorKey of newFailures) {
         try {
           await axios.post(VIP_SLACK_WEBHOOK_URL, {
-            text: `:warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
+            text: `${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
           });
         } catch (slackErr) {
           console.warn(`Slack sensor‐failure post failed for station ${id}:`, slackErr.message);
@@ -231,5 +231,4 @@ export const handler = async () => { await checkAll(); };
 
 // await checkAll();
 
-// // (Optionally export processUser if you want to unit-test it from elsewhere)
 // export { processUser };

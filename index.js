@@ -223,5 +223,5 @@ async function checkAll() {
 }
 
 export const handler = async () => { await checkAll(); };
-await checkAll();
+// await checkAll();
 // export { processUser };

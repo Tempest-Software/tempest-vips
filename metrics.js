@@ -9,35 +9,33 @@ export function buildMetricLines(
   timestamp,
   onlineCount,
   offlineCount,
-  sensorFailureCounts,
-  sensorSuccessCounts
+  totalStations,
+  sensorFailureCounts,    // per-sensor failure counts
 ) {
   const name = userName.toLowerCase();
-
   const lines = [
     `vip.${name}_station_online_count.${functionName},${timestamp},${onlineCount}`,
-    `vip.${name}_station_offline_count.${functionName},${timestamp},${offlineCount}`,
+    `vip.${name}_station_offline_count.${functionName},${timestamp},${offlineCount}`
   ];
 
-  const failureKeys = Object.keys(sensorFailureCounts);
-  if (failureKeys.length > 0) {
-    for (const key of failureKeys) {
-      const count = sensorFailureCounts[key];
-      lines.push(
-        `vip.${name}_station_${key}_failure_count.${functionName},${timestamp},${count}`
-      );
-    }
-
-    const totalFailures = failureKeys.reduce((sum, k) => sum + (sensorFailureCounts[k] || 0), 0);
+  // 1) Per-sensor failure counts
+  for (const sensor of Object.keys(sensorFailureCounts)) {
+    const count = sensorFailureCounts[sensor] || 0;
     lines.push(
-      `vip.${name}_station_total_failure_count.${functionName},${timestamp},${totalFailures}`
-    );
-
-    const totalSuccesses = failureKeys.reduce((sum, k) => sum + (sensorSuccessCounts[k] || 0), 0);
-    lines.push(
-      `vip.${name}_station_total_success_count.${functionName},${timestamp},${totalSuccesses}`
+      `vip.${name}_station_${sensor}_failure_count.${functionName},${timestamp},${count}`
     );
   }
+
+  // 2) Total failures across all sensors
+  const totalFailures = Object.values(sensorFailureCounts).reduce((sum, c) => sum + c, 0);
+  lines.push(
+    `vip.${name}_station_total_sensor_failure_count.${functionName},${timestamp},${totalFailures}`
+  );
+
+  // 3) Total stations
+  lines.push(
+    `vip.${name}_station_total_count.${functionName},${timestamp},${totalStations}`
+  );
 
   return lines;
 }

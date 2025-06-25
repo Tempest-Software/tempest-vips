@@ -17,18 +17,7 @@ export async function loadCacheFor(userName) {
   try {
     const { Body } = await s3.getObject({ Bucket: S3_BUCKET, Key }).promise();
     const raw = JSON.parse(Body.toString());
-
-    const cache = {};
-    for (const [id, val] of Object.entries(raw)) {
-      if (typeof val === 'object' && val !== null) {
-        cache[id] = {
-          offline: Boolean(val.offline),
-          failures: Array.isArray(val.failures) ? val.failures : [],
-        };
-      }
-    }
-    
-    return cache;
+    return raw;
   } catch (err) {
     if (err.code === 'NoSuchKey' || err.code === 'NotFound') {
       return {};
@@ -45,4 +34,16 @@ export async function saveCacheFor(userName, cache) {
     Body:        JSON.stringify(cache, null, 2),
     ContentType: 'application/json',
   }).promise();
+}
+
+export function buildStationCacheEntry(statuses, isOffline) {
+  const entry = { offline: isOffline };
+  for (const ds of statuses) {
+    const failures = ds.failures.map(f => f.sensor);
+    entry[ds.serial] = {
+      failures,
+      failureCount: failures.length > 0 ? 1 : 0
+    };
+  }
+  return entry;
 }

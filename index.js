@@ -10,17 +10,27 @@ const {
   KOOTENAI_API_Key,
   CPI_API_Key,
   MOSS_API_Key,
-  CALPINE_API_Key
+  CALPINE_API_Key,
+  PROLOGIS_API_Key,
+  ALABAMAPOWER_API_Key,
+  BLACHLY_API_Key,
+  JOEMC_API_Key,
+  BENTON_API_Key
 } = config;
 
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
-const functionName = 'vip-lambda-julian';
+const functionName   = 'vip-lambda-julian';
 
 const USERS = [
-  { name: 'KOOTENAI', apiKey: KOOTENAI_API_Key, alertUserIds: ['UQJLHM6LV'] },
-  { name: 'CPI',      apiKey: CPI_API_Key,     alertUserIds: ['UQJLHM6LV'] },
-  { name: 'MOSS',     apiKey: MOSS_API_Key,    alertUserIds: ['U10DNQSBV'] },
-  { name: 'CALPINE',  apiKey: CALPINE_API_Key, alertUserIds: ['U06DYM1QMNK'] }
+  { name: 'KOOTENAI',      apiKey: KOOTENAI_API_Key,     alertUserIds: ['UQJLHM6LV'], alertsOn: true  },
+  { name: 'CPI',           apiKey: CPI_API_Key,          alertUserIds: ['UQJLHM6LV'], alertsOn: true  },
+  { name: 'MOSS',          apiKey: MOSS_API_Key,         alertUserIds: ['U10DNQSBV'], alertsOn: true  },
+  { name: 'CALPINE',       apiKey: CALPINE_API_Key,      alertUserIds: ['U06DYM1QMNK'], alertsOn: true  },
+  { name: 'PROLOGIS',      apiKey: PROLOGIS_API_Key,     alertsOn: false },
+  { name: 'ALABAMA POWER', apiKey: ALABAMAPOWER_API_Key, alertsOn: false },
+  { name: 'BLACHLY LANE',  apiKey: BLACHLY_API_Key,      alertsOn: false },
+  { name: 'JOEMC',         apiKey: JOEMC_API_Key,        alertsOn: false },
+  { name: 'BENTON REA',    apiKey: BENTON_API_Key,       alertsOn: false }
 ];
 
 const SENSOR_KEYS = [
@@ -33,21 +43,21 @@ const SENSOR_KEYS = [
   'pressure'
 ];
 
-async function processUser({ name, apiKey, alertUserIds }) {
+async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
   const serialFailureCounts = {};
   const sensorFailureCounts = {};
-  let cache = {};
+  let cache    = {};
   let newCache = {};
   let stationsData;
 
-  const mention = alertUserIds.map(u => `<@${u}>`).join(' ');
+  const mention = alertUserIds && alertUserIds.length ? alertUserIds.map(u => `<@${u}>`).join(' ') : '';
 
-  // Seed sensor counts
+  // seed per-sensor failure map
   for (const key of SENSOR_KEYS) {
     sensorFailureCounts[key] = 0;
   }
 
-  // 1) Fetch stations list
+  // 1) Fetch stations
   try {
     const resp = await axios.get(`${GROUP_BASE_URL}/stations?api_key=${apiKey}`);
     if (resp.status !== 200) {
@@ -60,7 +70,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
     return 0;
   }
 
-  // 2) Load existing cache
+  // 2) Load S3 cache
   try {
     cache = await loadCacheFor(name);
   } catch (err) {
@@ -71,11 +81,11 @@ async function processUser({ name, apiKey, alertUserIds }) {
 
   // 3) Process each station
   for (const station of stationsData) {
-    const id = String(station.station_id);
+    const id        = String(station.station_id);
     const prevEntry = cache[id] || {};
     const wasOffline = prevEntry.offline;
 
-    // Fetch diagnostics
+    // fetch diagnostics
     let statuses = [];
     try {
       const dResp = await axios.get(
@@ -88,17 +98,16 @@ async function processUser({ name, apiKey, alertUserIds }) {
       console.warn(`Error fetching diagnostics for station ${id}:`, err.message);
     }
 
-    // Determine failed devices and sensors
-    const failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
-    const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
-    const failedSerials = new Set(failuresOnly.map(ds => ds.serial));
+    // identify failures
+    const failuresOnly     = statuses.filter(ds => ds.sensorStatus === 'failure');
+    const currentFailures  = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
+    const failedSerials    = new Set(failuresOnly.map(ds => ds.serial));
 
-    // Count one per serial for serial metrics
+    // count one failure per serial
     for (const serial of failedSerials) {
       serialFailureCounts[serial] = (serialFailureCounts[serial] || 0) + 1;
     }
 
-    // NEW: Count every sensor failure for per-sensor metrics
     for (const ds of failuresOnly) {
       for (const f of ds.failures) {
         sensorFailureCounts[f.sensor] = (sensorFailureCounts[f.sensor] || 0) + 1;
@@ -107,7 +116,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
 
     const isOffline = station.state !== 1;
 
-    // A: online with new failures
+    // A) Online with new failures
     if (!isOffline && currentFailures.length) {
       newCache[id] = buildStationCacheEntry(statuses, isOffline);
       const oldFailures = Array.isArray(prevEntry.failures)
@@ -116,49 +125,53 @@ async function processUser({ name, apiKey, alertUserIds }) {
             .filter(v => v.failures)
             .flatMap(v => v.failures);
       const newFailures = currentFailures.filter(s => !oldFailures.includes(s));
-      for (const sensorKey of newFailures) {
+      if (alertsOn) {
+        for (const sensorKey of newFailures) {
+          try {
+            await axios.post(VIP_SLACK_WEBHOOK_URL, {
+              text: `${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
+            });
+          } catch {}
+        }
+      }
+      continue;
+    }
+
+    // B) Recovered from offline
+    if (!isOffline && wasOffline) {
+      delete newCache[id];
+      if (alertsOn) {
         try {
           await axios.post(VIP_SLACK_WEBHOOK_URL, {
-            text: `${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
+            text: `:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`,
+            link_names: 1
           });
         } catch {}
       }
       continue;
     }
 
-    // B: recovered from offline
-    if (!isOffline && wasOffline) {
-      delete newCache[id];
-      try {
-        await axios.post(VIP_SLACK_WEBHOOK_URL, {
-          text: `:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`,
-          link_names: 1
-        });
-      } catch {}
-      continue;
-    }
-
-    // C: still online, no failures
+    // C) Still online, no failures
     if (!isOffline) {
       newCache[id] = buildStationCacheEntry(statuses, isOffline);
       continue;
     }
 
-    // D: just went offline
+    // D) Just went offline
     if (!wasOffline) {
       const baseText = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
-
-      if (currentFailures.length) {
-        await axios.post(VIP_SLACK_WEBHOOK_URL, {
-          text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
-        });
-      } else {
-        await axios.post(VIP_SLACK_WEBHOOK_URL, { text: `${baseText}!` });
+      if (alertsOn) {
+        if (currentFailures.length) {
+          await axios.post(VIP_SLACK_WEBHOOK_URL, {
+            text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
+          });
+        } else {
+          await axios.post(VIP_SLACK_WEBHOOK_URL, { text: `${baseText}!` });
+        }
       }
     }
 
-
-    // offline fallback
+    // Offline fallback
     newCache[id] = buildStationCacheEntry(statuses, isOffline);
   }
 
@@ -170,11 +183,13 @@ async function processUser({ name, apiKey, alertUserIds }) {
     console.error(`Failed to save cache for ${name}:`, err.message);
   }
 
-  // 5) Emit metrics
+  // 5) Emit metrics (always runs, regardless of alertsOn)
   const totalStations = stationsData.length;
-  const offlineCount = stationsData.filter(s => newCache[String(s.station_id)]?.offline).length;
-  const onlineCount = totalStations - offlineCount;
-  const timestamp = Math.floor(Date.now() / 1000);
+  const offlineCount  = stationsData.filter(
+    s => newCache[String(s.station_id)]?.offline
+  ).length;
+  const onlineCount   = totalStations - offlineCount;
+  const timestamp     = Math.floor(Date.now() / 1000);
 
   const metricLines = buildMetricLines(
     name,
@@ -182,7 +197,7 @@ async function processUser({ name, apiKey, alertUserIds }) {
     timestamp,
     onlineCount,
     offlineCount,
-    totalStations,
+    serialFailureCounts,
     sensorFailureCounts
   );
   try {
@@ -192,9 +207,6 @@ async function processUser({ name, apiKey, alertUserIds }) {
   return offlineCount;
 }
 
-/**
- * Loop through every “user” and log if any station remains offline.
- */
 async function checkAll() {
   let anyOffline = false;
   const details = [];
@@ -214,6 +226,9 @@ async function checkAll() {
   }
 }
 
-export const handler = async () => { await checkAll(); };
+export const handler = async () => {
+  await checkAll();
+};
+
 // await checkAll();
 // export { processUser };

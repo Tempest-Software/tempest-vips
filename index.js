@@ -197,7 +197,6 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     timestamp,
     onlineCount,
     offlineCount,
-    serialFailureCounts,
     totalStations,
     sensorFailureCounts
   );

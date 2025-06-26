@@ -27,10 +27,10 @@ const USERS = [
   { name: 'MOSS',          apiKey: MOSS_API_Key,         alertUserIds: ['U10DNQSBV'], alertsOn: true  },
   { name: 'CALPINE',       apiKey: CALPINE_API_Key,      alertUserIds: ['U06DYM1QMNK'], alertsOn: true  },
   { name: 'PROLOGIS',      apiKey: PROLOGIS_API_Key,     alertsOn: false },
-  { name: 'ALABAMA POWER', apiKey: ALABAMAPOWER_API_Key, alertsOn: false },
-  { name: 'BLACHLY LANE',  apiKey: BLACHLY_API_Key,      alertsOn: false },
+  { name: 'ALABAMA_POWER', apiKey: ALABAMAPOWER_API_Key, alertsOn: false },
+  { name: 'BLACHLY_LANE',  apiKey: BLACHLY_API_Key,      alertsOn: false },
   { name: 'JOEMC',         apiKey: JOEMC_API_Key,        alertsOn: false },
-  { name: 'BENTON REA',    apiKey: BENTON_API_Key,       alertsOn: false }
+  { name: 'BENTON_REA',    apiKey: BENTON_API_Key,       alertsOn: false }
 ];
 
 const SENSOR_KEYS = [

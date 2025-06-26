@@ -118,10 +118,9 @@ async function processUser({ name, apiKey, alertUserIds }) {
       const newFailures = currentFailures.filter(s => !oldFailures.includes(s));
       for (const sensorKey of newFailures) {
         try {
-          // await axios.post(VIP_SLACK_WEBHOOK_URL, {
-          //   text: `${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
-          // });
-          console.log(`${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`);
+          await axios.post(VIP_SLACK_WEBHOOK_URL, {
+            text: `${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
+          });
         } catch {}
       }
       continue;
@@ -131,11 +130,10 @@ async function processUser({ name, apiKey, alertUserIds }) {
     if (!isOffline && wasOffline) {
       delete newCache[id];
       try {
-        // await axios.post(VIP_SLACK_WEBHOOK_URL, {
-        //   text: `:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`,
-        //   link_names: 1
-        // });
-        console.log(`:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`);
+        await axios.post(VIP_SLACK_WEBHOOK_URL, {
+          text: `:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`,
+          link_names: 1
+        });
       } catch {}
       continue;
     }
@@ -147,21 +145,15 @@ async function processUser({ name, apiKey, alertUserIds }) {
     }
 
     // D: just went offline
-    // D: just went offline
     if (!wasOffline) {
       const baseText = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
 
       if (currentFailures.length) {
-        // log or post with failures listed
-        console.log(
-          `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
-        );
-        // await axios.post(VIP_SLACK_WEBHOOK_URL, {
-        //   text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
-        // });
+        await axios.post(VIP_SLACK_WEBHOOK_URL, {
+          text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
+        });
       } else {
-        console.log(`${baseText}!`);
-        // await axios.post(VIP_SLACK_WEBHOOK_URL, { text: `${baseText}!` });
+        await axios.post(VIP_SLACK_WEBHOOK_URL, { text: `${baseText}!` });
       }
     }
 

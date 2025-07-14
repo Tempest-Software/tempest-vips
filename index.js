@@ -129,7 +129,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
         for (const sensorKey of newFailures) {
           try {
             await axios.post(VIP_SLACK_WEBHOOK_URL, {
-              text: `${mention} :warning: ${name} Station *${id}* has sensor failure: ${sensorKey}`
+              text: `${mention} :warning: ${name} Station *${id}* (${station.name}) has sensor failure: ${sensorKey}`
             });
           } catch {}
         }

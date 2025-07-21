@@ -81,7 +81,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
 
   // 3) Process each station
   for (const station of stationsData) {
-    const id        = String(station.station_id);
+    const id = String(station.station_id);
     const prevEntry = cache[id] || {};
     const wasOffline = prevEntry.offline;
 
@@ -99,9 +99,9 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     }
 
     // identify failures
-    const failuresOnly     = statuses.filter(ds => ds.sensorStatus === 'failure');
-    const currentFailures  = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
-    const failedSerials    = new Set(failuresOnly.map(ds => ds.serial));
+    const failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
+    const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
+    const failedSerials = new Set(failuresOnly.map(ds => ds.serial));
 
     // count one failure per serial
     for (const serial of failedSerials) {
@@ -119,19 +119,24 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     // A) Online with new failures
     if (!isOffline && currentFailures.length) {
       newCache[id] = buildStationCacheEntry(statuses, isOffline);
-      const oldFailures = Array.isArray(prevEntry.failures)
-        ? prevEntry.failures
-        : Object.values(prevEntry)
-            .filter(v => v.failures)
-            .flatMap(v => v.failures);
+      const oldFailures = Array.isArray(prevEntry.failures) ? prevEntry.failures : Object.values(prevEntry).filter(v => v.failures).flatMap(v => v.failures);
       const newFailures = currentFailures.filter(s => !oldFailures.includes(s));
-      if (alertsOn) {
-        for (const sensorKey of newFailures) {
-          try {
-            await axios.post(VIP_SLACK_WEBHOOK_URL, {
-              text: `${mention} :warning: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has sensor failure: ${sensorKey}`
-            });
-          } catch {}
+
+      if (alertsOn && newFailures.length) {
+        // Group new failures by device (serial)
+        const deviceFailuresMap = {};
+
+        for (const ds of failuresOnly) {
+          const newDeviceFailures = ds.failures.map(f => f.sensor).filter(sensor => newFailures.includes(sensor));
+          if (newDeviceFailures.length) {
+            deviceFailuresMap[ds.serial] = newDeviceFailures;
+          }
+        }
+        // Send one message per device with all new failures for that device
+        for (const [serial, sensors] of Object.entries(deviceFailuresMap)) {
+          await postSlackAlert(VIP_SLACK_WEBHOOK_URL, {
+            text: `${mention} :warning: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has sensor failures: ${sensors.join(', ')}`
+          });
         }
       }
       continue;
@@ -185,9 +190,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
 
   // 5) Emit metrics (always runs, regardless of alertsOn)
   const totalStations = stationsData.length;
-  const offlineCount  = stationsData.filter(
-    s => newCache[String(s.station_id)]?.offline
-  ).length;
+  const offlineCount  = stationsData.filter(s => newCache[String(s.station_id)]?.offline).length;
   const onlineCount   = totalStations - offlineCount;
   const timestamp     = Math.floor(Date.now() / 1000);
 

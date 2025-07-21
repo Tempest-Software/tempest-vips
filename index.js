@@ -80,6 +80,9 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
   newCache = { ...cache };
 
   // 3) Process each station
+  let healthyCount = 0;
+  let offlineCount = 0;
+
   for (const station of stationsData) {
     const id = String(station.station_id);
     const prevEntry = cache[id] || {};
@@ -108,15 +111,23 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
       serialFailureCounts[serial] = (serialFailureCounts[serial] || 0) + 1;
     }
 
-    for (const ds of failuresOnly) {
-      for (const f of ds.failures) {
-        sensorFailureCounts[f.sensor] = (sensorFailureCounts[f.sensor] || 0) + 1;
+    const isOffline = station.state !== 1;
+
+    // Only count sensor failures for offline stations
+    if (isOffline) {
+      for (const ds of failuresOnly) {
+        for (const f of ds.failures) {
+          sensorFailureCounts[f.sensor] = (sensorFailureCounts[f.sensor] || 0) + 1;
+        }
       }
     }
 
-    const isOffline = station.state !== 1;
+    // HEALTHY/UNHEALTHY LOGIC
+    if (!isOffline && currentFailures.length === 0) {
+      healthyCount++;
+    }
 
-    // A) Online with new failures
+    // ...existing alert logic...
     if (!isOffline && currentFailures.length) {
       newCache[id] = buildStationCacheEntry(statuses, isOffline);
       const oldFailures = Array.isArray(prevEntry.failures) ? prevEntry.failures : Object.values(prevEntry).filter(v => v.failures).flatMap(v => v.failures);
@@ -190,15 +201,13 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
 
   // 5) Emit metrics (always runs, regardless of alertsOn)
   const totalStations = stationsData.length;
-  const offlineCount  = stationsData.filter(s => newCache[String(s.station_id)]?.offline).length;
-  const onlineCount   = totalStations - offlineCount;
   const timestamp     = Math.floor(Date.now() / 1000);
 
   const metricLines = buildMetricLines(
     name,
     functionName,
     timestamp,
-    onlineCount,
+    healthyCount,
     offlineCount,
     totalStations,
     sensorFailureCounts

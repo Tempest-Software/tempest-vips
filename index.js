@@ -120,6 +120,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
           sensorFailureCounts[f.sensor] = (sensorFailureCounts[f.sensor] || 0) + 1;
         }
       }
+      offlineCount++;
     }
 
     // HEALTHY/UNHEALTHY LOGIC
@@ -242,5 +243,5 @@ export const handler = async () => {
   await checkAll();
 };
 
-// await checkAll();
+await checkAll();
 // export { processUser };

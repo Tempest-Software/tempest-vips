@@ -1,12 +1,13 @@
 import axios from 'axios';
 import config from './config.json' with { type: 'json' };
-
 import DeviceStatus from './DeviceStatus.js';
 import { loadCacheFor, saveCacheFor, buildStationCacheEntry } from './cache.js';
 import { buildMetricLines, sendMetricsBatch } from './metrics.js';
+import { Slack } from './Slack.js';
+
+const slack = new Slack(config.VIP_SLACK_WEBHOOK_URL);
 
 const {
-  VIP_SLACK_WEBHOOK_URL,
   KOOTENAI_API_Key,
   CPI_API_Key,
   MOSS_API_Key,
@@ -19,8 +20,9 @@ const {
 } = config;
 
 const GROUP_BASE_URL = 'https://swd.weatherflow.com/swd/rest';
-const functionName   = 'vip-lambda-julian';
+const functionName = 'vip-lambda-julian';
 
+// User definitions
 const USERS = [
   { name: 'KOOTENAI',      apiKey: KOOTENAI_API_Key,     alertUserIds: ['UQJLHM6LV'], alertsOn: true  },
   { name: 'CPI',           apiKey: CPI_API_Key,          alertUserIds: ['UQJLHM6LV'], alertsOn: true  },
@@ -43,16 +45,16 @@ const SENSOR_KEYS = [
   'pressure'
 ];
 
+// Process one user's stations
 async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
+  const mentions = slack.buildMentions(alertUserIds);
   const serialFailureCounts = {};
   const sensorFailureCounts = {};
-  let cache    = {};
+  let cache = {};
   let newCache = {};
   let stationsData;
 
-  const mention = alertUserIds && alertUserIds.length ? alertUserIds.map(u => `<@${u}>`).join(' ') : '';
-
-  // seed per-sensor failure map
+  // Initialize failure counters
   for (const key of SENSOR_KEYS) {
     sensorFailureCounts[key] = 0;
   }
@@ -70,7 +72,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     return 0;
   }
 
-  // 2) Load S3 cache
+  // 2) Load cache
   try {
     cache = await loadCacheFor(name);
   } catch (err) {
@@ -79,16 +81,18 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
   }
   newCache = { ...cache };
 
-  // 3) Process each station
   let healthyCount = 0;
   let offlineCount = 0;
 
+  // 3) Process each station
   for (const station of stationsData) {
     const id = String(station.station_id);
+    const stationName = station.name;
+    const stationLink = slack.buildStationLink(id, stationName);
     const prevEntry = cache[id] || {};
     const wasOffline = prevEntry.offline;
 
-    // fetch diagnostics
+    // Fetch diagnostics
     let statuses = [];
     try {
       const dResp = await axios.get(
@@ -101,19 +105,19 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
       console.warn(`Error fetching diagnostics for station ${id}:`, err.message);
     }
 
-    // identify failures
+    // Identify failures
     const failuresOnly = statuses.filter(ds => ds.sensorStatus === 'failure');
     const currentFailures = failuresOnly.flatMap(ds => ds.failures.map(f => f.sensor));
     const failedSerials = new Set(failuresOnly.map(ds => ds.serial));
 
-    // count one failure per serial
+    // Count serial failures once per device
     for (const serial of failedSerials) {
       serialFailureCounts[serial] = (serialFailureCounts[serial] || 0) + 1;
     }
 
     const isOffline = station.state !== 1;
 
-    // Only count sensor failures for offline stations
+    // Count sensor failures for offline stations
     if (isOffline) {
       for (const ds of failuresOnly) {
         for (const f of ds.failures) {
@@ -123,52 +127,48 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
       offlineCount++;
     }
 
-    // HEALTHY/UNHEALTHY LOGIC
+    // Count healthy stations
     if (!isOffline && currentFailures.length === 0) {
       healthyCount++;
     }
 
-    // ...existing alert logic...
+    // A) Unhealthy but online
     if (!isOffline && currentFailures.length) {
       newCache[id] = buildStationCacheEntry(statuses, isOffline);
-      const oldFailures = Array.isArray(prevEntry.failures) ? prevEntry.failures : Object.values(prevEntry).filter(v => v.failures).flatMap(v => v.failures);
+      const oldFailures = Array.isArray(prevEntry.failures)
+        ? prevEntry.failures
+        : Object.values(prevEntry)
+            .filter(v => v.failures)
+            .flatMap(v => v.failures);
       const newFailures = currentFailures.filter(s => !oldFailures.includes(s));
 
       if (alertsOn && newFailures.length) {
-        // Group new failures by device (serial)
         const deviceFailuresMap = {};
-
         for (const ds of failuresOnly) {
-          const newDeviceFailures = ds.failures.map(f => f.sensor).filter(sensor => newFailures.includes(sensor));
+          const newDeviceFailures = ds.failures
+            .map(f => f.sensor)
+            .filter(sensor => newFailures.includes(sensor));
           if (newDeviceFailures.length) {
             deviceFailuresMap[ds.serial] = newDeviceFailures;
           }
         }
-        // Send one message per device with all new failures for that device
-        for (const [serial, sensors] of Object.entries(deviceFailuresMap)) {
-          await postSlackAlert(VIP_SLACK_WEBHOOK_URL, {
-            text: `${mention} :warning: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has sensor failures: ${sensors.join(', ')}`
-          });
+        for (const sensors of Object.values(deviceFailuresMap)) {
+          await slack.sendSensorFailureAlert(mentions, name, stationLink, sensors);
         }
       }
       continue;
     }
 
-    // B) Recovered from offline
+    // B) Recovered
     if (!isOffline && wasOffline) {
       delete newCache[id];
       if (alertsOn) {
-        try {
-          await axios.post(VIP_SLACK_WEBHOOK_URL, {
-            text: `:white_check_mark: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) has *RECOVERED*!`,
-            link_names: 1
-          });
-        } catch {}
+        await slack.sendRecoveryAlert(name, stationLink);
       }
       continue;
     }
 
-    // C) Still online, no failures
+    // C) Healthy and online
     if (!isOffline) {
       newCache[id] = buildStationCacheEntry(statuses, isOffline);
       continue;
@@ -176,19 +176,12 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
 
     // D) Just went offline
     if (!wasOffline) {
-      const baseText = `${mention} :rotating_light: ${name} Station *<https://tempestwx.com/station/${id}|${id}>* (${station.name}) is *OFFLINE*`;
       if (alertsOn) {
-        if (currentFailures.length) {
-          await axios.post(VIP_SLACK_WEBHOOK_URL, {
-            text: `${baseText} and has sensor failures: ${currentFailures.join(', ')}`
-          });
-        } else {
-          await axios.post(VIP_SLACK_WEBHOOK_URL, { text: `${baseText}!` });
-        }
+        await slack.sendOfflineAlert(mentions, name, stationLink, currentFailures);
       }
     }
 
-    // Offline fallback
+    // Offline fallback (ensure cache updated)
     newCache[id] = buildStationCacheEntry(statuses, isOffline);
   }
 
@@ -200,10 +193,9 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     console.error(`Failed to save cache for ${name}:`, err.message);
   }
 
-  // 5) Emit metrics (always runs, regardless of alertsOn)
+  // 5) Emit metrics
   const totalStations = stationsData.length;
-  const timestamp     = Math.floor(Date.now() / 1000);
-
+  const timestamp = Math.floor(Date.now() / 1000);
   const metricLines = buildMetricLines(
     name,
     functionName,
@@ -220,6 +212,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
   return offlineCount;
 }
 
+// Entry point
 async function checkAll() {
   let anyOffline = false;
   const details = [];
@@ -242,6 +235,3 @@ async function checkAll() {
 export const handler = async () => {
   await checkAll();
 };
-
-await checkAll();
-// export { processUser };

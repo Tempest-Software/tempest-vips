@@ -88,16 +88,13 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
   for (const station of stationsData) {
     const id = String(station.station_id);
     const stationName = station.name;
-    const stationLink = slack.buildStationLink(id, stationName);
     const prevEntry = cache[id] || {};
     const wasOffline = prevEntry.offline;
 
     // Fetch diagnostics
     let statuses = [];
     try {
-      const dResp = await axios.get(
-        `${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`
-      );
+      const dResp = await axios.get(`${GROUP_BASE_URL}/diagnostics/${id}?api_key=${apiKey}`);
       if (dResp.status === 200 && Array.isArray(dResp.data.devices)) {
         statuses = DeviceStatus.processDevices(dResp.data.devices);
       }
@@ -153,7 +150,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
           }
         }
         for (const sensors of Object.values(deviceFailuresMap)) {
-          await slack.sendSensorFailureAlert(mentions, name, stationLink, sensors);
+          await slack.sendSensorFailureAlert(mentions, name, id, stationName, sensors);
         }
       }
       continue;
@@ -163,7 +160,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     if (!isOffline && wasOffline) {
       delete newCache[id];
       if (alertsOn) {
-        await slack.sendRecoveryAlert(name, stationLink);
+        await slack.sendRecoveryAlert(name, id, stationName);
       }
       continue;
     }
@@ -177,7 +174,7 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
     // D) Just went offline
     if (!wasOffline) {
       if (alertsOn) {
-        await slack.sendOfflineAlert(mentions, name, stationLink, currentFailures);
+        await slack.sendOfflineAlert(mentions, name, id, stationName, currentFailures);
       }
     }
 
@@ -212,7 +209,6 @@ async function processUser({ name, apiKey, alertUserIds, alertsOn }) {
   return offlineCount;
 }
 
-// Entry point
 async function checkAll() {
   let anyOffline = false;
   const details = [];
@@ -235,3 +231,5 @@ async function checkAll() {
 export const handler = async () => {
   await checkAll();
 };
+
+await checkAll();

@@ -8,8 +8,8 @@ export class Slack {
   async sendAlert(message) {
     try {
       await axios.post(this.webhookUrl, { 
-        text: message, 
-        link_names: 1 
+        text: message,
+        link_names: 1
       });
     } catch (error) {
       console.warn('Failed to send Slack alert:', error.message);
@@ -17,32 +17,31 @@ export class Slack {
   }
 
   buildMentions(userIds) {
-    return userIds && userIds.length 
-      ? userIds.map(id => `<@${id}>`).join(' ') + ' ' 
-      : '';
+    return userIds && userIds.length ? userIds.map(id => `<@${id}>`).join(' ') + ' ' : '';
   }
 
   buildStationLink(stationId, stationName) {
     return `*<https://tempestwx.com/station/${stationId}|${stationId}>* (${stationName})`;
   }
 
-  async sendSensorFailureAlert(mentions, userName, stationLink, sensors) {
-    const message = `${mentions}:warning: ${userName} Station ${stationLink} has sensor failures: ${sensors.join(', ')}`;
+  async sendSensorFailureAlert(mentions, userName, stationId, stationName, sensors) {
+    const link = this.buildStationLink(stationId, stationName);
+    const message = `${mentions}:warning: ${userName} Station ${link} has sensor failures: ${sensors.join(', ')}`;
     await this.sendAlert(message);
   }
 
-  async sendRecoveryAlert(userName, stationLink) {
-    const message = `:white_check_mark: ${userName} Station ${stationLink} has *RECOVERED*!`;
+  async sendRecoveryAlert(userName, stationId, stationName) {
+    const link = this.buildStationLink(stationId, stationName);
+    const message = `:white_check_mark: ${userName} Station ${link} has *RECOVERED*!`;
     await this.sendAlert(message);
   }
 
-  async sendOfflineAlert(mentions, userName, stationLink, failedSensors = []) {
-    const baseText = `${mentions}:rotating_light: ${userName} Station ${stationLink} is *OFFLINE*`;
-    
+  async sendOfflineAlert(mentions, userName, stationId, stationName, failedSensors = []) {
+    const link = this.buildStationLink(stationId, stationName);
+    const baseText = `${mentions}:rotating_light: ${userName} Station ${link} is *OFFLINE*`;
     const message = failedSensors.length > 0
       ? `${baseText} and has sensor failures: ${failedSensors.join(', ')}`
       : `${baseText}!`;
-
     await this.sendAlert(message);
   }
 }

@@ -7,14 +7,14 @@ export function buildMetricLines(
   userName,
   functionName,
   timestamp,
-  healthyCount,
+  onlineCount,
   offlineCount,
   totalStations,
   sensorFailureCounts,
 ) {
   const name = userName.toLowerCase();
   const lines = [
-    `vip.${name}_station_healthy_count.${functionName},${timestamp},${healthyCount}`,
+    `vip.${name}_station_online_count.${functionName},${timestamp},${onlineCount}`,
     `vip.${name}_station_offline_count.${functionName},${timestamp},${offlineCount}`
   ];
 

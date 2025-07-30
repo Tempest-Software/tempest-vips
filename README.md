@@ -65,12 +65,12 @@ The system monitors the following sensor types:
 
 ### Offline Alert
 ```
-🚨 @Julian Bowman USER Station *12345* (Station Name) is *OFFLINE*!
+🚨 @mention USER Station *12345* (Station Name) is *OFFLINE*!
 ```
 
 ### Sensor Failure Alert  
 ```
-⚠️ @Julian Bowman USER Station *12345* (Station Name) has sensor failures: air_temperature, wind
+⚠️ @mention USER Station *12345* (Station Name) has sensor failures: air_temperature, wind
 ```
 
 ### Recovery Alert

@@ -2,7 +2,6 @@ import axios from 'axios';
 import config from './config.json' with { type: 'json' };
 
 const { METRIC_URL } = config;
-// test push
 
 export function buildMetricLines(
   userName,
